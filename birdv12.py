@@ -76,6 +76,12 @@ def get_time_range():
     start_time = end_time - timedelta(days=1)
     return start_time, end_time
 
+# def get_time_range():
+#     now = datetime.now(timezone.utc)
+#     end_time = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
+#     start_time = end_time - timedelta(days=1)
+#     return start_time, end_time
+
 def extract_token(url):
     token_pattern = re.compile(r'/([A-Za-z0-9]{32,})')  # Modify pattern based on your URL structure
     match = token_pattern.search(url)
@@ -115,10 +121,11 @@ def extract_a_substring_signal_name(text):
 
     
 
-async def read_channel_messages_by_id(channel_id, limit=500):
+async def read_channel_messages_by_id(channel_id, limit=700):
     start_time, end_time = get_time_range()
     time_to = convert_to_unix_time(end_time)
     results = []
+    token_list = []
     print(start_time, end_time)
     async with TelegramClient('session_name', api_id, api_hash) as client:
         await client.start(phone=phone_number)
@@ -128,11 +135,12 @@ async def read_channel_messages_by_id(channel_id, limit=500):
             token_name = extract_token_name(message.message)
             print(message_date)
             print(token_name)
-            if start_time <= message_date <= end_time and  '⛔️' not  in token_name:
+            if start_time <= message_date <= end_time and  '⛔️' not  in token_name and token_name not in token_list:
                 time_from = convert_to_unix_time(message_date)
                 token = get_token_from_message_url(message)
                 token_name = extract_token_name(message.message)
                 signal_name = extract_a_substring_signal_name(message.message)
+                token_list.append(token_name)
                 print(token_name, signal_name)
                 if token:
                     price_info = get_prices(token, time_from, time_to)
@@ -186,6 +194,7 @@ def format_results(results):
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     yesterday_date = yesterday.strftime("%d %B")
     output = "<b>"+ yesterday_date+" best signals & statistics:</b>\n\n"
+    # output = "<b>"+ "28 July" +" best signals & statistics:</b>\n\n"
     count = 1
     for i, row in df_top.iterrows():
         if row.percentage_change > 1:
@@ -239,4 +248,4 @@ if __name__ == "__main__":
     bot_token = "7286220618:AAHVIE9mpwiVcwZBLut3WpXpeFBUnoe9IeU"
     
     send_report_to_channel(channel_id, report)
-    
+

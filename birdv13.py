@@ -6,6 +6,8 @@ from datetime import datetime, timezone, timedelta
 import re
 import pandas as pd
 import numpy as np
+import time
+import logging
 
 # Replace these with your actual API ID, API Hash, and phone number
 api_id = '21508194'
@@ -14,10 +16,9 @@ phone_number = '+919488223505'
 channel_id = -1002235691978  # Replace with your channel ID
 
 def convert_to_unix_time(dt):
-    unix_timestamp = int(dt.timestamp())
-    return unix_timestamp
+    return int(dt.timestamp())
 
-def get_prices(token, time_from, time_to):
+def get_prices(token, time_from, time_to, retries=5):
     url = f"https://public-api.birdeye.so/defi/history_price?address={token}&address_type=pair&type=1m&time_from={time_from}&time_to={time_to}"
 
     headers = {
@@ -25,50 +26,49 @@ def get_prices(token, time_from, time_to):
         "X-API-KEY": "ad9f3160a81043079d0e34a3acfd8cd5"
     }
 
-    try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        data = response.json()
+    for attempt in range(retries):
+        try:
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            data = response.json()
 
-        items = data['data']['items']
-        highest_price_item = max(items, key=lambda x: x['value'])
-        starting_price_item = items[0] if items else None
+            items = data['data']['items']
+            if not items:
+                return {"error": "No data items returned"}
 
-        highest_price = highest_price_item['value']
-        highest_timestamp = highest_price_item['unixTime']
-        starting_price = starting_price_item['value'] if starting_price_item else None
-        starting_timestamp = starting_price_item['unixTime'] if starting_price_item else None
+            highest_price_item = max(items, key=lambda x: x['value'])
+            starting_price_item = items[0]
 
-        
-        # Calculate time difference
-        if starting_timestamp and highest_timestamp:
+            highest_price = highest_price_item['value']
+            highest_timestamp = highest_price_item['unixTime']
+            starting_price = starting_price_item['value']
+            starting_timestamp = starting_price_item['unixTime']
+
+            # Calculate time difference
             time_to_highest = highest_timestamp - starting_timestamp
             time_to_highest_human_readable = str(timedelta(seconds=time_to_highest))
-        else:
-            time_to_highest_human_readable = "N/A"
 
-        # Calculate percentage change
-        if starting_price and highest_price:
+            # Calculate percentage change
             percentage_change = ((highest_price - starting_price) / starting_price) * 100
-        else:
-            percentage_change = None
 
-        # Convert Unix timestamp to human-readable format
-        highest_timestamp_human_readable = datetime.fromtimestamp(highest_timestamp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z') if highest_timestamp else "N/A"
-        starting_timestamp_human_readable = datetime.fromtimestamp(starting_timestamp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z') if starting_timestamp else "N/A"
+            # Convert Unix timestamp to human-readable format
+            highest_timestamp_human_readable = datetime.fromtimestamp(highest_timestamp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
+            starting_timestamp_human_readable = datetime.fromtimestamp(starting_timestamp, tz=timezone.utc).strftime('%Y-%m-%d %H:%M:%S %Z')
 
-        return {
-            "starting_price_time": starting_timestamp_human_readable,
-            "starting_price": starting_price,
-            "highest_price_time": highest_timestamp_human_readable,
-            "highest_price": highest_price,
-            "time_to_highest": timedelta(seconds=time_to_highest), 
-            "percentage_change": percentage_change
-        }
-    except requests.exceptions.RequestException as e:
-        return {"error": f"API request error: {e}"}
-    except KeyError as e:
-        return {"error": f"Data parsing error: Missing key {e}"}
+            return {
+                "starting_price_time": starting_timestamp_human_readable,
+                "starting_price": starting_price,
+                "highest_price_time": highest_timestamp_human_readable,
+                "highest_price": highest_price,
+                "time_to_highest": timedelta(seconds=time_to_highest),
+                "percentage_change": percentage_change
+            }
+
+        except requests.exceptions.RequestException as e:
+            logging.warning(f"Attempt {attempt + 1} failed: {e}")
+            time.sleep(1)  # Wait 1 second before retrying
+
+    return {"error": "API request failed after multiple attempts"}
 
 def get_time_range():
     now = datetime.now(timezone.utc)
@@ -99,54 +99,59 @@ def extract_token_name(message_text):
     return None
 
 def extract_a_substring_signal_name(text):
-
     # Find the index of the last pipe character
     pipe_index = text.rfind('|')
     
     # If no pipe character is found, return None
-    if pipe_index == -1:
+    if (pipe_index == -1) or (pipe_index == len(text) - 1):
         return None
     
     # Extract the substring starting from the pipe index
     substring = text[pipe_index+1:]
     
     # Check if the substring matches 'a1' or 'a10'
-    return substring
+    return substring.strip()
 
-    
-
-async def read_channel_messages_by_id(channel_id, limit=500):
-    start_time, end_time = get_time_range()
-    time_to = convert_to_unix_time(end_time)
-    results = []
-    print(start_time, end_time)
+async def fetch_messages(channel_id, limit=1000):
     async with TelegramClient('session_name', api_id, api_hash) as client:
         await client.start(phone=phone_number)
-        count = 0
+        
+        # Fetch the last 'limit' messages
+        messages = []
         async for message in client.iter_messages(channel_id, limit=limit):
-            message_date = message.date
+            messages.append(message)
+        
+        return messages
+
+async def read_channel_messages_from_telegram(channel_id, start_time, end_time):
+    time_to = convert_to_unix_time(end_time)
+    results = []
+    token_list = []
+    print(start_time, end_time)
+    messages = await fetch_messages(channel_id)
+    for message in messages:
+        message_date = message.date
+        token_name = extract_token_name(message.message)
+        print(message_date)
+        print(token_name)
+        if start_time <= message_date <= end_time and '⛔️' not in token_name and token_name not in token_list:
+            time_from = convert_to_unix_time(message_date)
+            token = get_token_from_message_url(message)
             token_name = extract_token_name(message.message)
-            print(message_date)
-            print(token_name)
-            if start_time <= message_date <= end_time and  '⛔️' not  in token_name:
-                time_from = convert_to_unix_time(message_date)
-                token = get_token_from_message_url(message)
-                token_name = extract_token_name(message.message)
-                signal_name = extract_a_substring_signal_name(message.message)
-                print(token_name, signal_name)
-                if token:
-                    price_info = get_prices(token, time_from, time_to)
-                    if 'error' not in price_info:
-                        count += 1
-                        print(count)
-                        price_info.update({"token": "https://birdeye.so/token/So11111111111111111111111111111111111111112/"+ token +"?chain=solana"})
-                        price_info.update({"token_name": token_name})
-                        price_info.update({"signal_name": signal_name})
-                        results.append(price_info)
-                    await asyncio.sleep(3)  # avoid hitting rate limits
+            signal_name = extract_a_substring_signal_name(message.message)
+            token_list.append(token_name)
+            print(token_name, signal_name)
+            if token:
+                price_info = get_prices(token, time_from, time_to)
+                if 'error' not in price_info:
+                    print(f"Processed token: {token_name}")
+                    price_info.update({"token": "https://birdeye.so/token/"+ token +"?chain=solana"})
+                    price_info.update({"token_name": token_name})
+                    price_info.update({"signal_name": signal_name})
+                    results.append(price_info)
+                await asyncio.sleep(3)  # avoid hitting rate limits
 
     return results
-
 
 def send_report_to_channel(chat_id, text):
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -163,29 +168,26 @@ def send_report_to_channel(chat_id, text):
 
 def format_results(results):
     df = pd.DataFrame(results)
-    # df['percentage_change'] = np.where(df['percentage_change'] < 50, 0.0, df['percentage_change'])
-    # Group the DataFrame by signal_name
     grouped_df = df.groupby('signal_name')
 
     # Calculate the number of profitable trades for each signal
     profitable_trades = grouped_df['percentage_change'].apply(lambda x: (sum(x > 50), len(x)))
 
     # Print the number of profitable trades for each signal
-    
-    df_sorted = df.sort_values(by="percentage_change", ascending=False)
-    df_top = df.sort_values(by="percentage_change", ascending=False).head(10)
-    # Save to CSV
+    df_sorted = df.sort_values("percentage_change", ascending=False)
+    df_top = df_sorted.head(10)
     csv_file = 'token_statistics.csv'
     df_sorted.to_csv(csv_file, index=False)
-    
+
     # Count total signals, positive, and zero/negative percentage changes
     total_signals = len(df_sorted)
     total_positive_percentage = sum(df_sorted['percentage_change'] > 0)
     total_zero_or_negative_percentage = total_signals - total_positive_percentage
-    
+
     yesterday = datetime.now(timezone.utc) - timedelta(days=1)
     yesterday_date = yesterday.strftime("%d %B")
-    output = "<b>"+ yesterday_date+" best signals & statistics:</b>\n\n"
+    output = f"<b>{yesterday_date} best signals & statistics:</b>\n\n"
+
     count = 1
     for i, row in df_top.iterrows():
         if row.percentage_change > 1:
@@ -213,30 +215,32 @@ def format_results(results):
     output += f"Increased 2x (100%+): {sum(df_sorted['percentage_change'] > 100)}\n"
     output += f"Increased 1.5x (50%+): {sum(df_sorted['percentage_change'] > 50)}\n"
 
-    
-    
-    
     # Add total signals and percentage counts to the output
     output += f"\n<b>Total Signals:</b> {total_signals}\n"
     output += f"<b>Total Positive Percentage Changes:</b> {total_positive_percentage}\n"
     output += f"<b>Total Zero or Negative Percentage Changes:</b> {total_zero_or_negative_percentage}\n\n\n"
+
     output += "<b>Profitable Trades for Each Signal</b>:\n"
     for signal, (profitable, total) in profitable_trades.items():
-        if profitable/total*100 > 50:
-            output += f"<b>{signal}</b>: {profitable}/{total} ({profitable/total*100:.2f}% profitable)\n"
+        profitability_percent = (profitable / total) * 100
+        if profitability_percent > 50:
+            output += f"<b>{signal}</b>: {profitable}/{total} ({profitability_percent:.2f}% profitable)\n"
         else:
-            output += f"<b>{signal}</b>: {profitable}/{total} ({profitable/total*100:.2f}%)\n"
+            output += f"<b>{signal}</b>: {profitable}/{total} ({profitability_percent:.2f}%)\n"
     return output
 
-if __name__ == "__main__":
-    results = asyncio.run(read_channel_messages_by_id(channel_id))
+if __name__ == "__main__":  
+    start_time, end_time = get_time_range()
+    # start_time = datetime(2024, 7, 28, 0, 0, 0, tzinfo=timezone.utc)
+    # end_time = datetime(2024, 7, 29, 0, 0, 0, tzinfo=timezone.utc)
+    results = asyncio.run(read_channel_messages_from_telegram(channel_id, start_time, end_time))
+    print(results)
     report = format_results(results)
     
-    # Replace with your Telegram channel ID
-    channel_id = "-1002218204095"
+    # Replace with your Telegram channel ID for sending the report
+    report_channel_id = "-1002218204095"
     
     # Replace with your bot token obtained from BotFather
     bot_token = "7286220618:AAHVIE9mpwiVcwZBLut3WpXpeFBUnoe9IeU"
     
-    send_report_to_channel(channel_id, report)
-    
+    send_report_to_channel(report_channel_id, report)

@@ -70,9 +70,15 @@ def get_prices(token, time_from, time_to):
     except KeyError as e:
         return {"error": f"Data parsing error: Missing key {e}"}
 
+# def get_time_range():
+#     now = datetime.now(timezone.utc)
+#     end_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+#     start_time = end_time - timedelta(days=1)
+#     return start_time, end_time
+
 def get_time_range():
     now = datetime.now(timezone.utc)
-    end_time = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_time = now.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
     start_time = end_time - timedelta(days=1)
     return start_time, end_time
 
@@ -233,7 +239,7 @@ if __name__ == "__main__":
     report = format_results(results)
     
     # Replace with your Telegram channel ID
-    channel_id = "-1002218204095"
+    channel_id = "-1002167235961"
     
     # Replace with your bot token obtained from BotFather
     bot_token = "7286220618:AAHVIE9mpwiVcwZBLut3WpXpeFBUnoe9IeU"
